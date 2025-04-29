@@ -1,9 +1,12 @@
-# DailyPli
+# NewDayNewIndie
 
-YouTube 채널의 최신 동영상을 자동으로 플레이리스트에 추가하는 프로젝트입니다.
+미러볼 뮤직에 올라오는 최근 음악을 유튜브 뮤직에서 들을 수 있도록 매일 플레이리스트를 갱신하는 프로그램 (최근 20곡)
+
+https://www.youtube.com/@mirrorballmusickorea
+
+Cursor, Perplexity 를 이용해 개발 진행.
 
 ## 기능
-
 - 지정된 YouTube 채널의 최신 동영상을 자동으로 감지
 - 매일 자정에 플레이리스트 업데이트
 - GitHub Actions를 통한 자동화된 실행

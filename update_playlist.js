@@ -150,7 +150,7 @@ async function getLatestVideos(channelId) {
             key: process.env.YOUTUBE_API_KEY,
             channelId: channelId,
             part: 'snippet',
-            maxResults: 10,
+            maxResults: 20,
             order: 'date',
             type: 'video'
         });
