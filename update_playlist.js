@@ -25,6 +25,61 @@ const oauth2Client = new google.auth.OAuth2(
     process.env.YOUTUBE_CLIENT_SECRET
 );
 
+// 동영상 필터링 설정
+const FILTER_CONFIG = {
+    minDuration: 60, // 최소 1분
+    includePatterns: [/\[MV\]/i, /\[Official Audio\]/i]
+};
+
+// 동영상 상세 정보 가져오기
+async function getVideoDetails(videoId) {
+    try {
+        const response = await youtube.videos.list({
+            key: process.env.YOUTUBE_API_KEY,
+            part: 'contentDetails,snippet',
+            id: videoId
+        });
+
+        if (response.data.items && response.data.items.length > 0) {
+            return response.data.items[0];
+        }
+        return null;
+    } catch (error) {
+        console.error(`동영상 ${videoId}의 상세 정보를 가져오는데 실패했습니다:`, error);
+        return null;
+    }
+}
+
+// 동영상 길이를 초 단위로 변환
+function parseDuration(duration) {
+    const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    if (!match) return 0;
+
+    const hours = parseInt(match[1] || 0);
+    const minutes = parseInt(match[2] || 0);
+    const seconds = parseInt(match[3] || 0);
+
+    return hours * 3600 + minutes * 60 + seconds;
+}
+
+// 동영상 필터링
+function shouldIncludeVideo(video) {
+    const title = video.snippet.title;
+
+    // 포함할 패턴 확인
+    for (const pattern of FILTER_CONFIG.includePatterns) {
+        if (pattern.test(title)) {
+            // 길이 확인
+            const duration = parseDuration(video.contentDetails.duration);
+            if (duration >= FILTER_CONFIG.minDuration) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 // 플레이리스트 생성 또는 가져오기
 async function getOrCreatePlaylist() {
     try {
@@ -100,12 +155,21 @@ async function getLatestVideos(channelId) {
             type: 'video'
         });
 
-        return response.data.items.map(item => ({
-            id: item.id.videoId,
-            title: item.snippet.title,
-            channelName: item.snippet.channelTitle,
-            publishedAt: item.snippet.publishedAt
-        }));
+        const videos = [];
+        for (const item of response.data.items) {
+            const videoDetails = await getVideoDetails(item.id.videoId);
+            if (videoDetails && shouldIncludeVideo(videoDetails)) {
+                videos.push({
+                    id: item.id.videoId,
+                    title: item.snippet.title,
+                    channelName: item.snippet.channelTitle,
+                    publishedAt: item.snippet.publishedAt,
+                    duration: parseDuration(videoDetails.contentDetails.duration)
+                });
+            }
+        }
+
+        return videos;
     } catch (error) {
         console.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다:`, error);
         return [];
@@ -151,6 +215,7 @@ async function updatePlaylist() {
 
         for (const video of videos) {
             await addVideoToPlaylist(playlistId, video.id);
+            console.log(`동영상 추가: ${video.title} (${Math.floor(video.duration / 60)}분 ${video.duration % 60}초)`);
         }
 
         console.log('플레이리스트가 업데이트되었습니다.');
