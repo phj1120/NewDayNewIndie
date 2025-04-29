@@ -1,0 +1,12 @@
+{
+  "name": "dailypli",
+  "version": "1.0.0",
+  "description": "Automatically updates YouTube playlist with latest videos from subscribed channels",
+  "main": "update_playlist.js",
+  "scripts": {
+    "start": "node update_playlist.js"
+  },
+  "dependencies": {
+    "googleapis": "^128.0.0"
+  }
+} 
