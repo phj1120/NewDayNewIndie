@@ -1,13 +1,13 @@
 {
-  "name": "dailypli",
+  "name": "newdaynewindie",
   "version": "1.0.0",
-  "description": "Automatically updates YouTube playlist with latest videos from subscribed channels",
+  "description": "YouTube Music playlist updater",
   "main": "update_playlist.js",
   "scripts": {
     "start": "node update_playlist.js"
   },
   "dependencies": {
-    "dotenv": "^16.5.0",
-    "googleapis": "^128.0.0"
+    "googleapis": "^128.0.0",
+    "dotenv": "^16.3.1"
   }
 }
