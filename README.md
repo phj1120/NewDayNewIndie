@@ -4,6 +4,10 @@
 
 https://www.youtube.com/@mirrorballmusickorea
 
+https://console.cloud.google.com/welcome?project=newdaynewindie&authuser=2
+
+https://www.youtube.com/playlist?list=PLxMD8vPoaDld7SdlzVCXnZQF8yCjGH-xo
+
 Cursor, Perplexity 를 이용해 개발 진행.
 
 ## 기능
