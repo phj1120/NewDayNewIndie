@@ -1,243 +1,353 @@
 const { google } = require('googleapis');
 require('dotenv').config();
 
-// YouTube API 설정
-const youtube = google.youtube('v3');
-
-// 환경 변수 확인
-const requiredEnvVars = [
-    'YOUTUBE_API_KEY',
-    'YOUTUBE_CLIENT_ID',
-    'YOUTUBE_CLIENT_SECRET',
-    'YOUTUBE_CHANNEL_ID'
-];
-
-for (const envVar of requiredEnvVars) {
-    if (!process.env[envVar]) {
-        console.error(`${envVar} 환경 변수가 설정되지 않았습니다.`);
-        process.exit(1);
+// 상수 정의
+const CONSTANTS = {
+    API: {
+        VERSION: 'v3',
+        BATCH_SIZE: 50,
+        MAX_RESULTS: 20,
+        PARTS: {
+            SNIPPET: 'snippet',
+            CONTENT_DETAILS: 'contentDetails',
+            STATUS: 'status'
+        },
+        RETRY: {
+            MAX_ATTEMPTS: 3,
+            INITIAL_DELAY: 1000, // 1초
+            MAX_DELAY: 10000 // 10초
+        }
+    },
+    VIDEO: {
+        INCLUDE_PATTERNS: [/\[MV\]/i, /\[Official Audio\]/i],
+        KIND: 'youtube#video'
+    },
+    PLAYLIST: {
+        TITLE: 'Daily Music Updates',
+        DESCRIPTION: 'Automatically updated playlist with latest music from subscribed channels',
+        PRIVACY: 'private'
     }
-}
-
-// OAuth2 클라이언트 설정
-const oauth2Client = new google.auth.OAuth2(
-    process.env.YOUTUBE_CLIENT_ID,
-    process.env.YOUTUBE_CLIENT_SECRET
-);
-
-// 동영상 필터링 설정
-const FILTER_CONFIG = {
-    minDuration: 60, // 최소 1분
-    includePatterns: [/\[MV\]/i, /\[Official Audio\]/i]
 };
 
-// 동영상 상세 정보 가져오기
-async function getVideoDetails(videoId) {
-    try {
-        const response = await youtube.videos.list({
-            key: process.env.YOUTUBE_API_KEY,
-            part: 'contentDetails,snippet',
-            id: videoId
+// 환경 변수 정의
+const ENV_VARS = {
+    API_KEY: 'YOUTUBE_API_KEY',
+    CLIENT_ID: 'YOUTUBE_CLIENT_ID',
+    CLIENT_SECRET: 'YOUTUBE_CLIENT_SECRET',
+    CHANNEL_ID: 'YOUTUBE_CHANNEL_ID',
+    PLAYLIST_ID: 'YOUTUBE_PLAYLIST_ID',
+    ACCESS_TOKEN: 'YOUTUBE_ACCESS_TOKEN',
+    REFRESH_TOKEN: 'YOUTUBE_REFRESH_TOKEN'
+};
+
+// 로깅 유틸리티
+class Logger {
+    static info(message) {
+        console.log(`[INFO] ${message}`);
+    }
+
+    static error(message, error = null) {
+        console.error(`[ERROR] ${message}`, error ? `\n${error.stack}` : '');
+    }
+
+    static warn(message) {
+        console.warn(`[WARN] ${message}`);
+    }
+}
+
+// YouTube API 클라이언트
+class YouTubeClient {
+    constructor() {
+        this.validateEnvVars();
+        this.youtube = google.youtube(CONSTANTS.API.VERSION);
+        this.oauth2Client = new google.auth.OAuth2(
+            process.env[ENV_VARS.CLIENT_ID],
+            process.env[ENV_VARS.CLIENT_SECRET]
+        );
+    }
+
+    validateEnvVars() {
+        const missingVars = Object.values(ENV_VARS).filter(envVar => !process.env[envVar]);
+        if (missingVars.length > 0) {
+            throw new Error(`필수 환경 변수가 설정되지 않았습니다: ${missingVars.join(', ')}`);
+        }
+    }
+
+    setCredentials() {
+        this.oauth2Client.setCredentials({
+            access_token: process.env[ENV_VARS.ACCESS_TOKEN],
+            refresh_token: process.env[ENV_VARS.REFRESH_TOKEN]
         });
-
-        if (response.data.items && response.data.items.length > 0) {
-            return response.data.items[0];
-        }
-        return null;
-    } catch (error) {
-        console.error(`동영상 ${videoId}의 상세 정보를 가져오는데 실패했습니다:`, error);
-        return null;
     }
 }
 
-// 동영상 길이를 초 단위로 변환
-function parseDuration(duration) {
-    const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-    if (!match) return 0;
-
-    const hours = parseInt(match[1] || 0);
-    const minutes = parseInt(match[2] || 0);
-    const seconds = parseInt(match[3] || 0);
-
-    return hours * 3600 + minutes * 60 + seconds;
-}
-
-// 동영상 필터링
-function shouldIncludeVideo(video) {
-    const title = video.snippet.title;
-
-    // 포함할 패턴 확인
-    for (const pattern of FILTER_CONFIG.includePatterns) {
-        if (pattern.test(title)) {
-            // 길이 확인
-            const duration = parseDuration(video.contentDetails.duration);
-            if (duration >= FILTER_CONFIG.minDuration) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-// 플레이리스트 생성 또는 가져오기
-async function getOrCreatePlaylist() {
-    try {
-        const savedPlaylistId = process.env.YOUTUBE_PLAYLIST_ID;
-        if (savedPlaylistId) {
-            try {
-                await youtube.playlists.list({
-                    auth: oauth2Client,
-                    part: 'snippet',
-                    id: savedPlaylistId
-                });
-                return savedPlaylistId;
-            } catch (error) {
-                console.log('저장된 플레이리스트가 존재하지 않습니다. 새로 생성합니다.');
-            }
-        }
-
-        const response = await youtube.playlists.insert({
-            auth: oauth2Client,
-            part: 'snippet,status',
-            requestBody: {
-                snippet: {
-                    title: 'Daily Music Updates',
-                    description: 'Automatically updated playlist with latest music from subscribed channels'
-                },
-                status: {
-                    privacyStatus: 'private'
-                }
-            }
-        });
-
-        const playlistId = response.data.id;
-        console.log('새 플레이리스트가 생성되었습니다. 다음 GitHub Secrets에 이 ID를 추가해주세요:');
-        console.log('YOUTUBE_PLAYLIST_ID:', playlistId);
-        return playlistId;
-    } catch (error) {
-        console.error('플레이리스트 생성/가져오기 중 오류가 발생했습니다:', error);
-        throw error;
-    }
-}
-
-// 플레이리스트 비우기
-async function clearPlaylist(playlistId) {
-    try {
-        const response = await youtube.playlistItems.list({
-            auth: oauth2Client,
-            part: 'id',
-            playlistId: playlistId,
-            maxResults: 50
-        });
-
-        for (const item of response.data.items) {
-            await youtube.playlistItems.delete({
-                auth: oauth2Client,
-                id: item.id
-            });
-        }
-    } catch (error) {
-        console.error('플레이리스트 비우기 중 오류가 발생했습니다:', error);
-        throw error;
-    }
-}
-
-// 최신 동영상 가져오기
-async function getLatestVideos(channelId) {
-    try {
-        let videos = [];
-        let nextPageToken = null;
+// 동영상 유틸리티
+class VideoUtils {
+    static parseDuration(duration) {
+        if (!duration) return 0;
         
-        while (videos.length < 20) {
-            const response = await youtube.search.list({
-                key: process.env.YOUTUBE_API_KEY,
-                channelId: channelId,
-                part: 'snippet',
-                maxResults: 50,
-                order: 'date',
-                type: 'video',
-                pageToken: nextPageToken
-            });
+        const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+        if (!match) return 0;
 
-            for (const item of response.data.items) {
-                const videoDetails = await getVideoDetails(item.id.videoId);
-                if (videoDetails && shouldIncludeVideo(videoDetails)) {
-                    videos.push({
-                        id: item.id.videoId,
-                        title: item.snippet.title,
-                        channelName: item.snippet.channelTitle,
-                        publishedAt: item.snippet.publishedAt,
-                        duration: parseDuration(videoDetails.contentDetails.duration)
-                    });
-                    
-                    if (videos.length >= 20) break;
-                }
-            }
+        const hours = parseInt(match[1] || 0);
+        const minutes = parseInt(match[2] || 0);
+        const seconds = parseInt(match[3] || 0);
 
-            nextPageToken = response.data.nextPageToken;
-            if (!nextPageToken) break;
+        return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    static shouldIncludeVideo(video) {
+        if (!video?.snippet?.title) {
+            return false;
         }
 
-        return videos.slice(0, 20); // 최대 20개까지만 반환
-    } catch (error) {
-        console.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다:`, error);
-        return [];
+        const title = video.snippet.title;
+        return CONSTANTS.VIDEO.INCLUDE_PATTERNS.some(pattern => pattern.test(title));
+    }
+
+    static formatDuration(duration) {
+        const minutes = Math.floor(duration / 60);
+        const seconds = duration % 60;
+        return `${minutes}분 ${seconds}초`;
     }
 }
 
-// 동영상을 플레이리스트에 추가
-async function addVideoToPlaylist(playlistId, videoId) {
-    try {
-        await youtube.playlistItems.insert({
-            auth: oauth2Client,
-            part: 'snippet',
-            requestBody: {
-                snippet: {
-                    playlistId: playlistId,
-                    resourceId: {
-                        kind: 'youtube#video',
-                        videoId: videoId
+// 유틸리티 함수
+class Utils {
+    static async retry(fn, context, maxAttempts = CONSTANTS.API.RETRY.MAX_ATTEMPTS) {
+        let attempt = 0;
+        let lastError;
+
+        while (attempt < maxAttempts) {
+            try {
+                return await fn.call(context);
+            } catch (error) {
+                lastError = error;
+                attempt++;
+                
+                if (attempt === maxAttempts) {
+                    throw error;
+                }
+
+                const delay = Math.min(
+                    CONSTANTS.API.RETRY.INITIAL_DELAY * Math.pow(2, attempt - 1),
+                    CONSTANTS.API.RETRY.MAX_DELAY
+                );
+                
+                Logger.warn(`시도 ${attempt}/${maxAttempts} 실패. ${delay}ms 후 재시도...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+
+        throw lastError;
+    }
+}
+
+// 동영상 수집기
+class VideoCollector {
+    constructor(youtubeClient) {
+        this.youtube = youtubeClient.youtube;
+        this.videoCache = new Map(); // 동영상 상세 정보 캐시
+    }
+
+    async getVideoDetails(videoId) {
+        // 캐시 확인
+        if (this.videoCache.has(videoId)) {
+            return this.videoCache.get(videoId);
+        }
+
+        try {
+            const response = await this.youtube.videos.list({
+                key: process.env[ENV_VARS.API_KEY],
+                part: `${CONSTANTS.API.PARTS.CONTENT_DETAILS},${CONSTANTS.API.PARTS.SNIPPET}`,
+                id: videoId
+            });
+
+            const video = response.data.items?.[0] || null;
+            if (video) {
+                this.videoCache.set(videoId, video);
+            }
+            return video;
+        } catch (error) {
+            Logger.error(`동영상 ${videoId}의 상세 정보를 가져오는데 실패했습니다`, error);
+            return null;
+        }
+    }
+
+    async getLatestVideos(channelId) {
+        try {
+            let videos = [];
+            let nextPageToken = null;
+            
+            while (videos.length < CONSTANTS.API.MAX_RESULTS) {
+                const response = await Utils.retry(
+                    async () => this.youtube.search.list({
+                        key: process.env[ENV_VARS.API_KEY],
+                        channelId: channelId,
+                        part: CONSTANTS.API.PARTS.SNIPPET,
+                        maxResults: CONSTANTS.API.BATCH_SIZE,
+                        order: 'date',
+                        type: 'video',
+                        pageToken: nextPageToken
+                    }),
+                    this
+                );
+
+                // 제목만으로 먼저 필터링
+                const filteredItems = response.data.items.filter(item => 
+                    CONSTANTS.VIDEO.INCLUDE_PATTERNS.some(pattern => 
+                        pattern.test(item.snippet.title)
+                    )
+                );
+
+                // 필요한 동영상만 상세 정보 조회
+                for (const item of filteredItems) {
+                    if (videos.length >= CONSTANTS.API.MAX_RESULTS) break;
+
+                    const videoDetails = await this.getVideoDetails(item.id.videoId);
+                    if (videoDetails) {
+                        videos.push({
+                            id: item.id.videoId,
+                            title: item.snippet.title,
+                            channelName: item.snippet.channelTitle,
+                            publishedAt: item.snippet.publishedAt,
+                            duration: VideoUtils.parseDuration(videoDetails.contentDetails.duration)
+                        });
                     }
                 }
+
+                nextPageToken = response.data.nextPageToken;
+                if (!nextPageToken) break;
             }
-        });
-    } catch (error) {
-        console.error(`동영상 ${videoId} 추가 중 오류가 발생했습니다:`, error);
+
+            return videos.slice(0, CONSTANTS.API.MAX_RESULTS);
+        } catch (error) {
+            Logger.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다`, error);
+            return [];
+        }
     }
 }
 
-// 플레이리스트 업데이트
-async function updatePlaylist() {
-    console.log('플레이리스트 업데이트 시작...');
-    
-    try {
-        oauth2Client.setCredentials({
-            access_token: process.env.YOUTUBE_ACCESS_TOKEN,
-            refresh_token: process.env.YOUTUBE_REFRESH_TOKEN
-        });
+// 플레이리스트 관리자
+class PlaylistManager {
+    constructor(youtubeClient) {
+        this.youtube = youtubeClient.youtube;
+        this.oauth2Client = youtubeClient.oauth2Client;
+        this.playlistCache = new Map(); // 플레이리스트 항목 캐시
+    }
 
-        const playlistId = await getOrCreatePlaylist();
-        await clearPlaylist(playlistId);
-        
-        const videos = await getLatestVideos(process.env.YOUTUBE_CHANNEL_ID);
-        videos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-
-        for (const video of videos) {
-            await addVideoToPlaylist(playlistId, video.id);
-            console.log(`동영상 추가: ${video.title} (${Math.floor(video.duration / 60)}분 ${video.duration % 60}초)`);
+    async getPlaylistItems(playlistId) {
+        // 캐시 확인
+        if (this.playlistCache.has(playlistId)) {
+            return this.playlistCache.get(playlistId);
         }
 
-        console.log('플레이리스트가 업데이트되었습니다.');
-        console.log(`총 ${videos.length}개의 동영상이 추가되었습니다.`);
+        try {
+            const response = await Utils.retry(
+                async () => this.youtube.playlistItems.list({
+                    auth: this.oauth2Client,
+                    part: CONSTANTS.API.PARTS.SNIPPET,
+                    playlistId: playlistId,
+                    maxResults: CONSTANTS.API.MAX_RESULTS
+                }),
+                this
+            );
+
+            const items = response.data.items || [];
+            this.playlistCache.set(playlistId, items);
+            return items;
+        } catch (error) {
+            Logger.error('플레이리스트 항목을 가져오는데 실패했습니다', error);
+            return [];
+        }
+    }
+
+    async updatePlaylistItems(playlistId, newVideos) {
+        try {
+            const existingItems = await this.getPlaylistItems(playlistId);
+            const existingVideoIds = new Set(existingItems.map(item => item.snippet.resourceId.videoId));
+
+            // 새로운 동영상 추가
+            const videosToAdd = newVideos.filter(video => !existingVideoIds.has(video.id));
+            for (const video of videosToAdd) {
+                await Utils.retry(
+                    async () => this.addVideoToPlaylist(playlistId, video.id),
+                    this
+                );
+                Logger.info(`동영상 추가: ${video.title} (${VideoUtils.formatDuration(video.duration)})`);
+            }
+
+            // 최대 개수 초과 시 오래된 항목 제거
+            const totalItems = existingItems.length + videosToAdd.length;
+            if (totalItems > CONSTANTS.API.MAX_RESULTS) {
+                const itemsToRemove = existingItems.slice(0, totalItems - CONSTANTS.API.MAX_RESULTS);
+                for (const item of itemsToRemove) {
+                    await Utils.retry(
+                        async () => this.youtube.playlistItems.delete({
+                            auth: this.oauth2Client,
+                            id: item.id
+                        }),
+                        this
+                    );
+                    Logger.info(`동영상 제거: ${item.snippet.title}`);
+                }
+            }
+
+            // 캐시 업데이트
+            this.playlistCache.delete(playlistId);
+        } catch (error) {
+            Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다', error);
+            throw error;
+        }
+    }
+
+    async addVideoToPlaylist(playlistId, videoId) {
+        try {
+            await this.youtube.playlistItems.insert({
+                auth: this.oauth2Client,
+                part: CONSTANTS.API.PARTS.SNIPPET,
+                requestBody: {
+                    snippet: {
+                        playlistId: playlistId,
+                        resourceId: {
+                            kind: CONSTANTS.VIDEO.KIND,
+                            videoId: videoId
+                        }
+                    }
+                }
+            });
+        } catch (error) {
+            Logger.error(`동영상 ${videoId} 추가 중 오류가 발생했습니다`, error);
+        }
+    }
+}
+
+// 메인 실행 함수
+async function updatePlaylist() {
+    Logger.info('플레이리스트 업데이트 시작...');
+    
+    try {
+        const youtubeClient = new YouTubeClient();
+        youtubeClient.setCredentials();
+
+        const playlistManager = new PlaylistManager(youtubeClient);
+        const videoCollector = new VideoCollector(youtubeClient);
+
+        const playlistId = await playlistManager.getOrCreatePlaylist();
+        const videos = await videoCollector.getLatestVideos(process.env[ENV_VARS.CHANNEL_ID]);
+        videos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+        await playlistManager.updatePlaylistItems(playlistId, videos);
+
+        Logger.info('플레이리스트 업데이트가 완료되었습니다.');
     } catch (error) {
-        console.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error);
+        Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다', error);
         throw error;
     }
 }
 
 // 실행
 updatePlaylist().catch(error => {
-    console.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error);
-    process.exit(1); 
+    Logger.error('프로그램 실행 중 오류가 발생했습니다', error);
+    process.exit(1);
 }); 
