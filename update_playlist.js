@@ -146,30 +146,40 @@ async function clearPlaylist(playlistId) {
 // 최신 동영상 가져오기
 async function getLatestVideos(channelId) {
     try {
-        const response = await youtube.search.list({
-            key: process.env.YOUTUBE_API_KEY,
-            channelId: channelId,
-            part: 'snippet',
-            maxResults: 20,
-            order: 'date',
-            type: 'video'
-        });
+        let videos = [];
+        let nextPageToken = null;
+        
+        while (videos.length < 20) {
+            const response = await youtube.search.list({
+                key: process.env.YOUTUBE_API_KEY,
+                channelId: channelId,
+                part: 'snippet',
+                maxResults: 50,
+                order: 'date',
+                type: 'video',
+                pageToken: nextPageToken
+            });
 
-        const videos = [];
-        for (const item of response.data.items) {
-            const videoDetails = await getVideoDetails(item.id.videoId);
-            if (videoDetails && shouldIncludeVideo(videoDetails)) {
-                videos.push({
-                    id: item.id.videoId,
-                    title: item.snippet.title,
-                    channelName: item.snippet.channelTitle,
-                    publishedAt: item.snippet.publishedAt,
-                    duration: parseDuration(videoDetails.contentDetails.duration)
-                });
+            for (const item of response.data.items) {
+                const videoDetails = await getVideoDetails(item.id.videoId);
+                if (videoDetails && shouldIncludeVideo(videoDetails)) {
+                    videos.push({
+                        id: item.id.videoId,
+                        title: item.snippet.title,
+                        channelName: item.snippet.channelTitle,
+                        publishedAt: item.snippet.publishedAt,
+                        duration: parseDuration(videoDetails.contentDetails.duration)
+                    });
+                    
+                    if (videos.length >= 20) break;
+                }
             }
+
+            nextPageToken = response.data.nextPageToken;
+            if (!nextPageToken) break;
         }
 
-        return videos;
+        return videos.slice(0, 20); // 최대 20개까지만 반환
     } catch (error) {
         console.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다:`, error);
         return [];
