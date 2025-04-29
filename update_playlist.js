@@ -177,3 +177,4 @@ async function updatePlaylist() {
 updatePlaylist().catch(error => {
     console.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error);
     process.exit(1); 
+}); 
