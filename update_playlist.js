@@ -1,37 +1,36 @@
 const { google } = require('googleapis');
+require('dotenv').config();
 
 // YouTube API 설정
 const youtube = google.youtube('v3');
 
-// API 키를 환경 변수에서 가져오기
-const API_KEY = process.env.YOUTUBE_API_KEY;
-if (!API_KEY) {
-    console.error('YOUTUBE_API_KEY 환경 변수가 설정되지 않았습니다.');
-    process.exit(1);
+// 환경 변수 확인
+const requiredEnvVars = [
+    'YOUTUBE_API_KEY',
+    'YOUTUBE_CLIENT_ID',
+    'YOUTUBE_CLIENT_SECRET',
+    'YOUTUBE_CHANNEL_ID'
+];
+
+for (const envVar of requiredEnvVars) {
+    if (!process.env[envVar]) {
+        console.error(`${envVar} 환경 변수가 설정되지 않았습니다.`);
+        process.exit(1);
+    }
 }
 
 // OAuth2 클라이언트 설정
 const oauth2Client = new google.auth.OAuth2(
     process.env.YOUTUBE_CLIENT_ID,
-    process.env.YOUTUBE_CLIENT_SECRET,
-    process.env.YOUTUBE_REDIRECT_URI
+    process.env.YOUTUBE_CLIENT_SECRET
 );
-
-// 채널 ID를 환경 변수에서 가져오기
-const CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID;
-if (!CHANNEL_ID) {
-    console.error('YOUTUBE_CHANNEL_ID 환경 변수가 설정되지 않았습니다.');
-    process.exit(1);
-}
 
 // 플레이리스트 생성 또는 가져오기
 async function getOrCreatePlaylist() {
     try {
-        // 저장된 플레이리스트 ID 확인
         const savedPlaylistId = process.env.YOUTUBE_PLAYLIST_ID;
         if (savedPlaylistId) {
             try {
-                // 플레이리스트가 존재하는지 확인
                 await youtube.playlists.list({
                     auth: oauth2Client,
                     part: 'snippet',
@@ -43,7 +42,6 @@ async function getOrCreatePlaylist() {
             }
         }
 
-        // 새 플레이리스트 생성
         const response = await youtube.playlists.insert({
             auth: oauth2Client,
             part: 'snippet,status',
@@ -71,7 +69,6 @@ async function getOrCreatePlaylist() {
 // 플레이리스트 비우기
 async function clearPlaylist(playlistId) {
     try {
-        // 플레이리스트의 모든 동영상 가져오기
         const response = await youtube.playlistItems.list({
             auth: oauth2Client,
             part: 'id',
@@ -79,7 +76,6 @@ async function clearPlaylist(playlistId) {
             maxResults: 50
         });
 
-        // 각 동영상을 삭제
         for (const item of response.data.items) {
             await youtube.playlistItems.delete({
                 auth: oauth2Client,
@@ -96,7 +92,7 @@ async function clearPlaylist(playlistId) {
 async function getLatestVideos(channelId) {
     try {
         const response = await youtube.search.list({
-            key: API_KEY,
+            key: process.env.YOUTUBE_API_KEY,
             channelId: channelId,
             part: 'snippet',
             maxResults: 10,
@@ -142,25 +138,17 @@ async function updatePlaylist() {
     console.log('플레이리스트 업데이트 시작...');
     
     try {
-        // OAuth2 토큰 설정
         oauth2Client.setCredentials({
             access_token: process.env.YOUTUBE_ACCESS_TOKEN,
             refresh_token: process.env.YOUTUBE_REFRESH_TOKEN
         });
 
-        // 플레이리스트 가져오기 또는 생성
         const playlistId = await getOrCreatePlaylist();
-        
-        // 플레이리스트 비우기
         await clearPlaylist(playlistId);
         
-        // 채널의 최신 동영상 가져오기
-        const videos = await getLatestVideos(CHANNEL_ID);
-
-        // 최신순으로 정렬
+        const videos = await getLatestVideos(process.env.YOUTUBE_CHANNEL_ID);
         videos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
-        // 동영상을 플레이리스트에 추가
         for (const video of videos) {
             await addVideoToPlaylist(playlistId, video.id);
         }
