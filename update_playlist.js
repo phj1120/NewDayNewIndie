@@ -147,7 +147,8 @@ class Utils {
 class VideoCollector {
     constructor(youtubeClient) {
         this.youtube = youtubeClient.youtube;
-        this.videoCache = new Map(); // 동영상 상세 정보 캐시
+        this.oauth2Client = youtubeClient.oauth2Client;
+        this.videoCache = new Map();
     }
 
     async getVideoDetails(videoId) {
@@ -157,11 +158,14 @@ class VideoCollector {
         }
 
         try {
-            const response = await this.youtube.videos.list({
-                key: process.env[ENV_VARS.API_KEY],
-                part: `${CONSTANTS.API.PARTS.CONTENT_DETAILS},${CONSTANTS.API.PARTS.SNIPPET}`,
-                id: videoId
-            });
+            const response = await Utils.retry(
+                async () => this.youtube.videos.list({
+                    auth: this.oauth2Client,
+                    part: `${CONSTANTS.API.PARTS.CONTENT_DETAILS},${CONSTANTS.API.PARTS.SNIPPET}`,
+                    id: videoId
+                }),
+                this
+            );
 
             const video = response.data.items?.[0] || null;
             if (video) {
@@ -182,7 +186,7 @@ class VideoCollector {
             while (videos.length < CONSTANTS.API.MAX_RESULTS) {
                 const response = await Utils.retry(
                     async () => this.youtube.search.list({
-                        key: process.env[ENV_VARS.API_KEY],
+                        auth: this.oauth2Client,
                         channelId: channelId,
                         part: CONSTANTS.API.PARTS.SNIPPET,
                         maxResults: CONSTANTS.API.BATCH_SIZE,
@@ -192,6 +196,10 @@ class VideoCollector {
                     }),
                     this
                 );
+
+                if (!response.data.items || response.data.items.length === 0) {
+                    break;
+                }
 
                 // 제목만으로 먼저 필터링
                 const filteredItems = response.data.items.filter(item => 
@@ -205,7 +213,7 @@ class VideoCollector {
                     if (videos.length >= CONSTANTS.API.MAX_RESULTS) break;
 
                     const videoDetails = await this.getVideoDetails(item.id.videoId);
-                    if (videoDetails) {
+                    if (videoDetails && VideoUtils.shouldIncludeVideo(videoDetails)) {
                         videos.push({
                             id: item.id.videoId,
                             title: item.snippet.title,
@@ -233,7 +241,52 @@ class PlaylistManager {
     constructor(youtubeClient) {
         this.youtube = youtubeClient.youtube;
         this.oauth2Client = youtubeClient.oauth2Client;
-        this.playlistCache = new Map(); // 플레이리스트 항목 캐시
+        this.playlistCache = new Map();
+    }
+
+    async getOrCreatePlaylist() {
+        try {
+            // 환경 변수에서 플레이리스트 ID 확인
+            const playlistId = process.env[ENV_VARS.PLAYLIST_ID];
+            if (playlistId) {
+                // 플레이리스트가 존재하는지 확인
+                try {
+                    await this.youtube.playlists.list({
+                        auth: this.oauth2Client,
+                        part: 'snippet',
+                        id: playlistId
+                    });
+                    return playlistId;
+                } catch (error) {
+                    Logger.warn(`플레이리스트 ${playlistId}가 존재하지 않습니다. 새로 생성합니다.`);
+                }
+            }
+
+            // 플레이리스트 생성
+            const response = await Utils.retry(
+                async () => this.youtube.playlists.insert({
+                    auth: this.oauth2Client,
+                    part: 'snippet,status',
+                    requestBody: {
+                        snippet: {
+                            title: CONSTANTS.PLAYLIST.TITLE,
+                            description: CONSTANTS.PLAYLIST.DESCRIPTION
+                        },
+                        status: {
+                            privacyStatus: CONSTANTS.PLAYLIST.PRIVACY
+                        }
+                    }
+                }),
+                this
+            );
+
+            const newPlaylistId = response.data.id;
+            Logger.info(`새 플레이리스트가 생성되었습니다: ${newPlaylistId}`);
+            return newPlaylistId;
+        } catch (error) {
+            Logger.error('플레이리스트 생성/조회 중 오류가 발생했습니다', error);
+            throw error;
+        }
     }
 
     async getPlaylistItems(playlistId) {
@@ -318,6 +371,7 @@ class PlaylistManager {
             });
         } catch (error) {
             Logger.error(`동영상 ${videoId} 추가 중 오류가 발생했습니다`, error);
+            throw error;
         }
     }
 }
@@ -334,9 +388,25 @@ async function updatePlaylist() {
         const videoCollector = new VideoCollector(youtubeClient);
 
         const playlistId = await playlistManager.getOrCreatePlaylist();
-        const videos = await videoCollector.getLatestVideos(process.env[ENV_VARS.CHANNEL_ID]);
+        Logger.info(`플레이리스트 ID: ${playlistId}`);
+
+        const channelId = process.env[ENV_VARS.CHANNEL_ID];
+        if (!channelId) {
+            throw new Error('채널 ID가 설정되지 않았습니다.');
+        }
+
+        Logger.info(`채널 ${channelId}의 최신 동영상을 가져오는 중...`);
+        const videos = await videoCollector.getLatestVideos(channelId);
+        
+        if (videos.length === 0) {
+            Logger.warn('가져올 수 있는 동영상이 없습니다.');
+            return;
+        }
+
+        Logger.info(`${videos.length}개의 동영상을 찾았습니다.`);
         videos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
+        Logger.info('플레이리스트 업데이트 중...');
         await playlistManager.updatePlaylistItems(playlistId, videos);
 
         Logger.info('플레이리스트 업데이트가 완료되었습니다.');
