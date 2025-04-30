@@ -145,15 +145,13 @@ class VideoCollector {
 
                 // 필터링된 동영상 추가
                 for (const item of filteredItems) {
-                    if (videos.length >= CONSTANTS.API.MAX_RESULTS) break;
-
                     videos.push({
                         id: item.id.videoId,
                         title: item.snippet.title,
                         channelName: item.snippet.channelTitle,
                         publishedAt: item.snippet.publishedAt
                     });
-                    Logger.info(`동영상 추가됨: ${item.snippet.title}`);
+                    Logger.info(`동영상 추가됨: ${item.snippet.title} (${item.snippet.publishedAt})`);
                 }
 
                 nextPageToken = response.data.nextPageToken;
@@ -163,7 +161,10 @@ class VideoCollector {
                 }
             }
 
-            return videos.slice(0, CONSTANTS.API.MAX_RESULTS);
+            // 날짜순으로 정렬하고 최신 20개만 반환
+            return videos
+                .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
+                .slice(0, CONSTANTS.API.MAX_RESULTS);
         } catch (error) {
             Logger.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다`, error);
             return [];
