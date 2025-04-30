@@ -9,6 +9,12 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
+      - name: Check current time
+        run: |
+          echo "Current time: $(date)"
+          echo "Current time in UTC: $(date -u)"
+          echo "Current time in Korea: $(TZ=Asia/Seoul date)"
+
       - uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -19,13 +25,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run update playlist
+      - name: Run update script
         env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-          YOUTUBE_REDIRECT_URI: ${{ secrets.YOUTUBE_REDIRECT_URI }}
-          YOUTUBE_ACCESS_TOKEN: ${{ secrets.YOUTUBE_ACCESS_TOKEN }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
           YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
           YOUTUBE_PLAYLIST_ID: ${{ secrets.YOUTUBE_PLAYLIST_ID }}
