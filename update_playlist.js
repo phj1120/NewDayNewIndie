@@ -115,67 +115,44 @@ class VideoCollector {
 
     async getLatestVideos(channelId) {
         try {
-            let videos = [];
-            let nextPageToken = null;
-            let totalResults = 0;
-            
-            // 먼저 최근 100개의 동영상을 가져옴
-            while (totalResults < 100) {
-                const response = await this.youtube.search.list({
-                    auth: this.oauth2Client,
-                    channelId: channelId,
-                    part: CONSTANTS.API.PARTS.SNIPPET,
-                    maxResults: CONSTANTS.API.BATCH_SIZE,
-                    order: 'date',
-                    type: 'video',
-                    pageToken: nextPageToken
-                });
+            // 최신 동영상 20개를 가져옴
+            const response = await this.youtube.search.list({
+                auth: this.oauth2Client,
+                channelId: channelId,
+                part: CONSTANTS.API.PARTS.SNIPPET,
+                maxResults: CONSTANTS.API.MAX_RESULTS,
+                order: 'date',
+                type: 'video'
+            });
 
-                if (!response.data.items || response.data.items.length === 0) {
-                    Logger.warn('더 이상 검색 결과가 없습니다.');
-                    break;
-                }
-
-                totalResults += response.data.items.length;
-
-                // 제목으로 필터링
-                const filteredItems = response.data.items.filter(item => 
-                    CONSTANTS.VIDEO.INCLUDE_PATTERNS.some(pattern => 
-                        pattern.test(item.snippet.title)
-                    )
-                );
-
-                Logger.info(`검색 결과 중 ${filteredItems.length}개의 동영상이 필터링되었습니다.`);
-
-                // 필터링된 동영상 추가
-                for (const item of filteredItems) {
-                    videos.push({
-                        id: item.id.videoId,
-                        title: item.snippet.title,
-                        channelName: item.snippet.channelTitle,
-                        publishedAt: item.snippet.publishedAt
-                    });
-                    Logger.info(`동영상 추가됨: ${item.snippet.title} (${item.snippet.publishedAt})`);
-                }
-
-                nextPageToken = response.data.nextPageToken;
-                if (!nextPageToken) {
-                    Logger.info('더 이상 페이지가 없습니다.');
-                    break;
-                }
+            if (!response.data.items || response.data.items.length === 0) {
+                Logger.warn('검색 결과가 없습니다.');
+                return [];
             }
 
-            // 날짜순으로 정렬하고 최신 20개만 반환
-            const sortedVideos = videos
-                .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
-                .slice(0, CONSTANTS.API.MAX_RESULTS);
+            // 제목으로 필터링
+            const filteredItems = response.data.items.filter(item => 
+                CONSTANTS.VIDEO.INCLUDE_PATTERNS.some(pattern => 
+                    pattern.test(item.snippet.title)
+                )
+            );
+
+            Logger.info(`검색 결과 중 ${filteredItems.length}개의 동영상이 필터링되었습니다.`);
+
+            // 필터링된 동영상 추가
+            const videos = filteredItems.map(item => ({
+                id: item.id.videoId,
+                title: item.snippet.title,
+                channelName: item.snippet.channelTitle,
+                publishedAt: item.snippet.publishedAt
+            }));
 
             Logger.info('최종 선택된 동영상 목록:');
-            sortedVideos.forEach((video, index) => {
+            videos.forEach((video, index) => {
                 Logger.info(`${index + 1}. ${video.title} (${video.publishedAt})`);
             });
 
-            return sortedVideos;
+            return videos;
         } catch (error) {
             Logger.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다`, error);
             return [];
@@ -192,69 +169,14 @@ class PlaylistManager {
 
     async getPlaylistItems(playlistId) {
         try {
-            let allItems = [];
-            let nextPageToken = null;
-
-            // 모든 페이지의 항목을 가져옴
-            do {
-                const response = await this.youtube.playlistItems.list({
-                    auth: this.oauth2Client,
-                    part: 'snippet',
-                    playlistId: playlistId,
-                    maxResults: 50,
-                    pageToken: nextPageToken
-                });
-
-                allItems = allItems.concat(response.data.items || []);
-                nextPageToken = response.data.nextPageToken;
-            } while (nextPageToken);
-
-            // 동영상 상세 정보 가져오기
-            const videoIds = allItems.map(item => item.snippet.resourceId.videoId);
-            const videoDetails = await this.youtube.videos.list({
+            const response = await this.youtube.playlistItems.list({
                 auth: this.oauth2Client,
                 part: 'snippet',
-                id: videoIds.join(',')
+                playlistId: playlistId,
+                maxResults: CONSTANTS.API.MAX_RESULTS
             });
 
-            // 동영상 상세 정보와 플레이리스트 항목 매핑
-            const videoMap = new Map(
-                videoDetails.data.items.map(video => [
-                    video.id,
-                    {
-                        publishedAt: new Date(video.snippet.publishedAt),
-                        title: video.snippet.title
-                    }
-                ])
-            );
-
-            // 날짜순으로 정렬하고 중복 제거
-            const uniqueItems = [];
-            const seenVideoIds = new Set();
-
-            allItems
-                .sort((a, b) => 
-                    videoMap.get(b.snippet.resourceId.videoId).publishedAt - 
-                    videoMap.get(a.snippet.resourceId.videoId).publishedAt
-                )
-                .forEach(item => {
-                    const videoId = item.snippet.resourceId.videoId;
-                    if (!seenVideoIds.has(videoId)) {
-                        seenVideoIds.add(videoId);
-                        uniqueItems.push(item);
-                    } else {
-                        Logger.warn(`중복된 동영상 제거: ${item.snippet.title}`);
-                        // 중복된 항목 삭제
-                        this.youtube.playlistItems.delete({
-                            auth: this.oauth2Client,
-                            id: item.id
-                        }).catch(error => {
-                            Logger.error(`중복 동영상 삭제 실패: ${item.snippet.title}`, error);
-                        });
-                    }
-                });
-
-            return uniqueItems;
+            return response.data.items || [];
         } catch (error) {
             Logger.error('플레이리스트 항목을 가져오는데 실패했습니다', error);
             return [];
@@ -273,89 +195,16 @@ class PlaylistManager {
                 Logger.info(`동영상 추가: ${video.title} (${video.publishedAt})`);
             }
 
-            // 모든 동영상의 상세 정보 가져오기
-            const allVideoIds = [
-                ...existingItems.map(item => item.snippet.resourceId.videoId),
-                ...videosToAdd.map(video => video.id)
-            ];
-            const videoDetails = await this.youtube.videos.list({
-                auth: this.oauth2Client,
-                part: 'snippet',
-                id: allVideoIds.join(',')
-            });
-
-            // 동영상 상세 정보 매핑
-            const videoMap = new Map(
-                videoDetails.data.items.map(video => [
-                    video.id,
-                    {
-                        publishedAt: new Date(video.snippet.publishedAt),
-                        title: video.snippet.title
-                    }
-                ])
-            );
-
-            // 모든 동영상을 날짜순으로 정렬하고 중복 제거
-            const allVideos = [];
-            const seenVideoIds = new Set();
-
-            [
-                ...existingItems.map(item => ({
-                    id: item.snippet.resourceId.videoId,
-                    title: videoMap.get(item.snippet.resourceId.videoId).title,
-                    publishedAt: videoMap.get(item.snippet.resourceId.videoId).publishedAt,
-                    playlistItemId: item.id
-                })),
-                ...videosToAdd.map(video => ({
-                    ...video,
-                    publishedAt: new Date(video.publishedAt)
-                }))
-            ]
-                .sort((a, b) => b.publishedAt - a.publishedAt)
-                .forEach(video => {
-                    if (!seenVideoIds.has(video.id)) {
-                        seenVideoIds.add(video.id);
-                        allVideos.push(video);
-                    } else {
-                        Logger.warn(`중복된 동영상 제거: ${video.title}`);
-                    }
-                });
-
             // 최대 개수 초과 시 오래된 항목 제거
-            if (allVideos.length > CONSTANTS.API.MAX_RESULTS) {
-                const itemsToRemove = allVideos.slice(CONSTANTS.API.MAX_RESULTS);
+            const allItems = [...existingItems];
+            if (allItems.length > CONSTANTS.API.MAX_RESULTS) {
+                const itemsToRemove = allItems.slice(CONSTANTS.API.MAX_RESULTS);
                 for (const item of itemsToRemove) {
-                    if (item.playlistItemId) {
-                        await this.youtube.playlistItems.delete({
-                            auth: this.oauth2Client,
-                            id: item.playlistItemId
-                        });
-                        Logger.info(`동영상 제거: ${item.title} (${item.publishedAt.toISOString()})`);
-                    }
-                }
-            }
-
-            // 플레이리스트 순서 재정렬
-            const finalVideos = allVideos.slice(0, CONSTANTS.API.MAX_RESULTS);
-            for (let i = 0; i < finalVideos.length; i++) {
-                const video = finalVideos[i];
-                if (video.playlistItemId) {
-                    await this.youtube.playlistItems.update({
+                    await this.youtube.playlistItems.delete({
                         auth: this.oauth2Client,
-                        part: 'snippet',
-                        requestBody: {
-                            id: video.playlistItemId,
-                            snippet: {
-                                playlistId: playlistId,
-                                resourceId: {
-                                    kind: 'youtube#video',
-                                    videoId: video.id
-                                },
-                                position: i
-                            }
-                        }
+                        id: item.id
                     });
-                    Logger.info(`동영상 순서 변경: ${video.title} -> 위치 ${i + 1} (${video.publishedAt.toISOString()})`);
+                    Logger.info(`동영상 제거: ${item.snippet.title}`);
                 }
             }
         } catch (error) {
@@ -397,9 +246,6 @@ async function updatePlaylist() {
         const playlistManager = new PlaylistManager(youtubeClient);
         const videoCollector = new VideoCollector(youtubeClient);
 
-        const playlistId = await playlistManager.getPlaylistItems(process.env.YOUTUBE_PLAYLIST_ID);
-        Logger.info(`플레이리스트 ID: ${playlistId}`);
-
         const channelId = process.env.YOUTUBE_CHANNEL_ID;
         if (!channelId) {
             throw new Error('채널 ID가 설정되지 않았습니다.');
@@ -414,9 +260,6 @@ async function updatePlaylist() {
         }
 
         Logger.info(`${videos.length}개의 동영상을 찾았습니다.`);
-        videos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-
-        Logger.info('플레이리스트 업데이트 중...');
         await playlistManager.updatePlaylistItems(process.env.YOUTUBE_PLAYLIST_ID, videos);
 
         Logger.info('플레이리스트 업데이트가 완료되었습니다.');
@@ -430,4 +273,4 @@ async function updatePlaylist() {
 updatePlaylist().catch(error => {
     Logger.error('프로그램 실행 중 오류가 발생했습니다', error);
     process.exit(1);
-}); 
+});
