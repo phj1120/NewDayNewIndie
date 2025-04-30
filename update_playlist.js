@@ -119,7 +119,7 @@ class VideoCollector {
             const response = await this.youtube.search.list({
                 auth: this.oauth2Client,
                 channelId: channelId,
-                part: CONSTANTS.API.PARTS.SNIPPET,
+                part: 'snippet',
                 maxResults: CONSTANTS.API.MAX_RESULTS,
                 order: 'date',
                 type: 'video'
@@ -154,7 +154,11 @@ class VideoCollector {
 
             return videos;
         } catch (error) {
-            Logger.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다`, error);
+            if (error.code === 403 && error.message.includes('quotaExceeded')) {
+                Logger.error('YouTube API 할당량이 초과되었습니다. 24시간 후에 다시 시도해주세요.');
+            } else {
+                Logger.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다: ${error.message}`);
+            }
             return [];
         }
     }
@@ -217,7 +221,7 @@ class PlaylistManager {
         try {
             await this.youtube.playlistItems.insert({
                 auth: this.oauth2Client,
-                part: CONSTANTS.API.PARTS.SNIPPET,
+                part: 'snippet',
                 requestBody: {
                     snippet: {
                         playlistId: playlistId,
@@ -250,6 +254,7 @@ async function updatePlaylist() {
         if (!channelId) {
             throw new Error('채널 ID가 설정되지 않았습니다.');
         }
+        Logger.info(`채널 ID: ${channelId}`);
 
         Logger.info(`채널 ${channelId}의 최신 동영상을 가져오는 중...`);
         const videos = await videoCollector.getLatestVideos(channelId);
@@ -264,7 +269,13 @@ async function updatePlaylist() {
 
         Logger.info('플레이리스트 업데이트가 완료되었습니다.');
     } catch (error) {
-        Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다', error);
+        if (error.code === 403 && error.message.includes('quotaExceeded')) {
+            Logger.error('YouTube API 할당량이 초과되었습니다. 24시간 후에 다시 시도해주세요.');
+        } else if (error.code === 404) {
+            Logger.error('채널을 찾을 수 없습니다. 채널 ID를 확인해주세요.');
+        } else {
+            Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error.message);
+        }
         throw error;
     }
 }
