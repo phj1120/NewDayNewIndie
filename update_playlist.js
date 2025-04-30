@@ -91,7 +91,6 @@ class Utils {
 // YouTube API 클라이언트
 class YouTubeClient {
     constructor() {
-        Utils.validateEnvVars();
         this.youtube = google.youtube(CONSTANTS.API.VERSION);
         this.oauth2Client = new google.auth.OAuth2(
             process.env.YOUTUBE_CLIENT_ID,
@@ -112,61 +111,30 @@ class VideoCollector {
     constructor(youtubeClient) {
         this.youtube = youtubeClient.youtube;
         this.oauth2Client = youtubeClient.oauth2Client;
-        this.lastApiCall = 0;
-        this.minApiCallInterval = 1000; // API 호출 간 최소 간격 (ms)
-    }
-
-    async sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    async ensureApiCallInterval() {
-        const now = Date.now();
-        const timeSinceLastCall = now - this.lastApiCall;
-        if (timeSinceLastCall < this.minApiCallInterval) {
-            await this.sleep(this.minApiCallInterval - timeSinceLastCall);
-        }
-        this.lastApiCall = Date.now();
     }
 
     async getLatestVideos(channelId) {
         try {
             let videos = [];
             let nextPageToken = null;
-            let totalAttempts = 0;
-            const maxTotalAttempts = 5; // 최대 시도 횟수
             
-            while (videos.length < CONSTANTS.API.MAX_RESULTS && totalAttempts < maxTotalAttempts) {
-                await this.ensureApiCallInterval();
-                
-                const response = await Utils.retry(
-                    async () => {
-                        try {
-                            return await this.youtube.search.list({
-                                auth: this.oauth2Client,
-                                channelId: channelId,
-                                part: CONSTANTS.API.PARTS.SNIPPET,
-                                maxResults: CONSTANTS.API.BATCH_SIZE,
-                                order: 'date',
-                                type: 'video',
-                                pageToken: nextPageToken
-                            });
-                        } catch (error) {
-                            if (error.response) {
-                                Logger.error(`검색 API 응답 오류: ${error.response.status} - ${error.response.statusText}`);
-                            }
-                            throw error;
-                        }
-                    },
-                    this
-                );
+            while (videos.length < CONSTANTS.API.MAX_RESULTS) {
+                const response = await this.youtube.search.list({
+                    auth: this.oauth2Client,
+                    channelId: channelId,
+                    part: CONSTANTS.API.PARTS.SNIPPET,
+                    maxResults: CONSTANTS.API.BATCH_SIZE,
+                    order: 'date',
+                    type: 'video',
+                    pageToken: nextPageToken
+                });
 
                 if (!response.data.items || response.data.items.length === 0) {
                     Logger.warn('더 이상 검색 결과가 없습니다.');
                     break;
                 }
 
-                // 제목만으로 필터링
+                // 제목으로 필터링
                 const filteredItems = response.data.items.filter(item => 
                     CONSTANTS.VIDEO.INCLUDE_PATTERNS.some(pattern => 
                         pattern.test(item.snippet.title)
@@ -193,20 +161,11 @@ class VideoCollector {
                     Logger.info('더 이상 페이지가 없습니다.');
                     break;
                 }
-
-                totalAttempts++;
-                if (totalAttempts >= maxTotalAttempts) {
-                    Logger.warn('최대 시도 횟수에 도달했습니다.');
-                    break;
-                }
             }
 
             return videos.slice(0, CONSTANTS.API.MAX_RESULTS);
         } catch (error) {
             Logger.error(`채널 ${channelId}의 동영상을 가져오는데 실패했습니다`, error);
-            if (error.response) {
-                Logger.error(`API 응답: ${JSON.stringify(error.response.data)}`);
-            }
             return [];
         }
     }
@@ -217,19 +176,10 @@ class PlaylistManager {
     constructor(youtubeClient) {
         this.youtube = youtubeClient.youtube;
         this.oauth2Client = youtubeClient.oauth2Client;
-        this.youtubeClient = youtubeClient;
-        this.playlistCache = new Map();
-        this.cacheExpiryTime = 5 * 60 * 1000; // 5분
-    }
-
-    async ensureValidToken() {
-        await this.youtubeClient.refreshTokenIfNeeded();
     }
 
     async getOrCreatePlaylist() {
         try {
-            await this.ensureValidToken();
-            
             // 환경 변수에서 플레이리스트 ID 확인
             const playlistId = process.env.YOUTUBE_PLAYLIST_ID;
             if (playlistId) {
@@ -247,32 +197,19 @@ class PlaylistManager {
             }
 
             // 플레이리스트 생성
-            const response = await Utils.retry(
-                async () => {
-                    await this.ensureValidToken();
-                    return this.youtube.playlists.insert({
-                        auth: this.oauth2Client,
-                        part: 'snippet,status',
-                        requestBody: {
-                            snippet: {
-                                title: CONSTANTS.PLAYLIST.TITLE,
-                                description: CONSTANTS.PLAYLIST.DESCRIPTION
-                            },
-                            status: {
-                                privacyStatus: CONSTANTS.PLAYLIST.PRIVACY
-                            }
-                        }
-                    });
-                },
-                this,
-                CONSTANTS.API.RETRY.MAX_ATTEMPTS,
-                (error) => {
-                    if (error.code === 401) {
-                        return true; // 인증 오류는 재시도
+            const response = await this.youtube.playlists.insert({
+                auth: this.oauth2Client,
+                part: 'snippet,status',
+                requestBody: {
+                    snippet: {
+                        title: CONSTANTS.PLAYLIST.TITLE,
+                        description: CONSTANTS.PLAYLIST.DESCRIPTION
+                    },
+                    status: {
+                        privacyStatus: CONSTANTS.PLAYLIST.PRIVACY
                     }
-                    return error.code !== 404; // 404 에러는 재시도하지 않음
                 }
-            );
+            });
 
             const newPlaylistId = response.data.id;
             Logger.info(`새 플레이리스트가 생성되었습니다: ${newPlaylistId}`);
@@ -284,41 +221,15 @@ class PlaylistManager {
     }
 
     async getPlaylistItems(playlistId) {
-        // 캐시 확인
-        const cachedData = this.playlistCache.get(playlistId);
-        if (cachedData && Date.now() < cachedData.expiryTime) {
-            return cachedData.items;
-        }
-
         try {
-            await this.ensureValidToken();
-            
-            const response = await Utils.retry(
-                async () => {
-                    await this.ensureValidToken();
-                    return this.youtube.playlistItems.list({
-                        auth: this.oauth2Client,
-                        part: CONSTANTS.API.PARTS.SNIPPET,
-                        playlistId: playlistId,
-                        maxResults: CONSTANTS.API.MAX_RESULTS
-                    });
-                },
-                this,
-                CONSTANTS.API.RETRY.MAX_ATTEMPTS,
-                (error) => {
-                    if (error.code === 401) {
-                        return true; // 인증 오류는 재시도
-                    }
-                    return error.code !== 404; // 404 에러는 재시도하지 않음
-                }
-            );
-
-            const items = response.data.items || [];
-            this.playlistCache.set(playlistId, {
-                items,
-                expiryTime: Date.now() + this.cacheExpiryTime
+            const response = await this.youtube.playlistItems.list({
+                auth: this.oauth2Client,
+                part: CONSTANTS.API.PARTS.SNIPPET,
+                playlistId: playlistId,
+                maxResults: CONSTANTS.API.MAX_RESULTS
             });
-            return items;
+
+            return response.data.items || [];
         } catch (error) {
             Logger.error('플레이리스트 항목을 가져오는데 실패했습니다', error);
             return [];
@@ -327,28 +238,13 @@ class PlaylistManager {
 
     async updatePlaylistItems(playlistId, newVideos) {
         try {
-            await this.ensureValidToken();
-            
             const existingItems = await this.getPlaylistItems(playlistId);
             const existingVideoIds = new Set(existingItems.map(item => item.snippet.resourceId.videoId));
 
             // 새로운 동영상 추가
             const videosToAdd = newVideos.filter(video => !existingVideoIds.has(video.id));
             for (const video of videosToAdd) {
-                await Utils.retry(
-                    async () => {
-                        await this.ensureValidToken();
-                        return this.addVideoToPlaylist(playlistId, video.id);
-                    },
-                    this,
-                    CONSTANTS.API.RETRY.MAX_ATTEMPTS,
-                    (error) => {
-                        if (error.code === 401) {
-                            return true; // 인증 오류는 재시도
-                        }
-                        return error.code !== 404; // 404 에러는 재시도하지 않음
-                    }
-                );
+                await this.addVideoToPlaylist(playlistId, video.id);
                 Logger.info(`동영상 추가: ${video.title}`);
             }
 
@@ -357,29 +253,13 @@ class PlaylistManager {
             if (totalItems > CONSTANTS.API.MAX_RESULTS) {
                 const itemsToRemove = existingItems.slice(0, totalItems - CONSTANTS.API.MAX_RESULTS);
                 for (const item of itemsToRemove) {
-                    await Utils.retry(
-                        async () => {
-                            await this.ensureValidToken();
-                            return this.youtube.playlistItems.delete({
-                                auth: this.oauth2Client,
-                                id: item.id
-                            });
-                        },
-                        this,
-                        CONSTANTS.API.RETRY.MAX_ATTEMPTS,
-                        (error) => {
-                            if (error.code === 401) {
-                                return true; // 인증 오류는 재시도
-                            }
-                            return error.code !== 404; // 404 에러는 재시도하지 않음
-                        }
-                    );
+                    await this.youtube.playlistItems.delete({
+                        auth: this.oauth2Client,
+                        id: item.id
+                    });
                     Logger.info(`동영상 제거: ${item.snippet.title}`);
                 }
             }
-
-            // 캐시 업데이트
-            this.playlistCache.delete(playlistId);
         } catch (error) {
             Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다', error);
             throw error;
@@ -388,8 +268,6 @@ class PlaylistManager {
 
     async addVideoToPlaylist(playlistId, videoId) {
         try {
-            await this.ensureValidToken();
-            
             await this.youtube.playlistItems.insert({
                 auth: this.oauth2Client,
                 part: CONSTANTS.API.PARTS.SNIPPET,
