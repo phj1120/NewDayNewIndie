@@ -115,20 +115,27 @@ class VideoCollector {
 
     async getLatestVideos(channelId) {
         try {
-            // 최신 동영상 20개를 가져옴
+            const publishedAfter = new Date();
+            publishedAfter.setDate(publishedAfter.getDate() - 10);
+            const publishedAfterString = publishedAfter.toISOString();
+
             const response = await this.youtube.search.list({
                 auth: this.oauth2Client,
                 channelId: channelId,
                 part: 'snippet',
-                maxResults: CONSTANTS.API.MAX_RESULTS,
+                maxResults: CONSTANTS.API.BATCH_SIZE,
                 order: 'date',
-                type: 'video'
+                publishedAfter: publishedAfterString
             });
 
             if (!response.data.items || response.data.items.length === 0) {
                 Logger.warn('검색 결과가 없습니다.');
                 return [];
             }
+
+            response.data.items.forEach(item => {
+                console.log('item', item);
+            });
 
             // 제목으로 필터링
             const filteredItems = response.data.items.filter(item => 
@@ -139,13 +146,15 @@ class VideoCollector {
 
             Logger.info(`검색 결과 중 ${filteredItems.length}개의 동영상이 필터링되었습니다.`);
 
-            // 필터링된 동영상 추가
-            const videos = filteredItems.map(item => ({
-                id: item.id.videoId,
-                title: item.snippet.title,
-                channelName: item.snippet.channelTitle,
-                publishedAt: item.snippet.publishedAt
-            }));
+            // 필터링된 동영상 추가 (최대 20개)
+            const videos = filteredItems
+                .slice(0, CONSTANTS.API.MAX_RESULTS)  // 최대 20개로 제한
+                .map(item => ({
+                    id: item.id.videoId,
+                    title: item.snippet.title,
+                    channelName: item.snippet.channelTitle,
+                    publishedAt: item.snippet.publishedAt
+                }));
 
             Logger.info('최종 선택된 동영상 목록:');
             videos.forEach((video, index) => {
@@ -171,70 +180,61 @@ class PlaylistManager {
         this.oauth2Client = youtubeClient.oauth2Client;
     }
 
+    async updatePlaylistItems(playlistId, videos) {
+        try {
+            // 플레이리스트의 현재 아이템 가져오기
+            const currentItems = await this.getPlaylistItems(playlistId);
+            
+            // 기존 동영상 모두 삭제
+            for (const item of currentItems) {
+                await this.youtube.playlistItems.delete({
+                    auth: this.oauth2Client,
+                    id: item.id
+                });
+                Logger.info(`기존 동영상 제거: ${item.snippet.title}`);
+            }
+
+            // 새 동영상 추가 (최신순으로)
+            for (const video of videos) {
+                await this.youtube.playlistItems.insert({
+                    auth: this.oauth2Client,
+                    part: 'snippet',
+                    resource: {
+                        snippet: {
+                            playlistId: playlistId,
+                            resourceId: {
+                                kind: 'youtube#video',
+                                videoId: video.id
+                            }
+                        }
+                    }
+                });
+                Logger.info(`동영상 추가 완료: ${video.title}`);
+            }
+
+            Logger.info('플레이리스트가 성공적으로 업데이트되었습니다.');
+        } catch (error) {
+            if (error.code === 403 && error.message.includes('quotaExceeded')) {
+                Logger.error('YouTube API 할당량이 초과되었습니다. 24시간 후에 다시 시도해주세요.');
+            } else {
+                Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error.message);
+            }
+            throw error;
+        }
+    }
+
     async getPlaylistItems(playlistId) {
         try {
             const response = await this.youtube.playlistItems.list({
                 auth: this.oauth2Client,
                 part: 'snippet',
                 playlistId: playlistId,
-                maxResults: CONSTANTS.API.MAX_RESULTS
+                maxResults: 50
             });
-
-            return response.data.items || [];
+            return response.data.items;
         } catch (error) {
-            Logger.error('플레이리스트 항목을 가져오는데 실패했습니다', error);
+            Logger.error('플레이리스트 아이템을 가져오는데 실패했습니다:', error.message);
             return [];
-        }
-    }
-
-    async updatePlaylistItems(playlistId, newVideos) {
-        try {
-            const existingItems = await this.getPlaylistItems(playlistId);
-            const existingVideoIds = new Set(existingItems.map(item => item.snippet.resourceId.videoId));
-
-            // 새로운 동영상 추가 (중복 체크)
-            const videosToAdd = newVideos.filter(video => !existingVideoIds.has(video.id));
-            for (const video of videosToAdd) {
-                await this.addVideoToPlaylist(playlistId, video.id);
-                Logger.info(`동영상 추가: ${video.title} (${video.publishedAt})`);
-            }
-
-            // 최대 개수 초과 시 오래된 항목 제거
-            const allItems = [...existingItems];
-            if (allItems.length > CONSTANTS.API.MAX_RESULTS) {
-                const itemsToRemove = allItems.slice(CONSTANTS.API.MAX_RESULTS);
-                for (const item of itemsToRemove) {
-                    await this.youtube.playlistItems.delete({
-                        auth: this.oauth2Client,
-                        id: item.id
-                    });
-                    Logger.info(`동영상 제거: ${item.snippet.title}`);
-                }
-            }
-        } catch (error) {
-            Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다', error);
-            throw error;
-        }
-    }
-
-    async addVideoToPlaylist(playlistId, videoId) {
-        try {
-            await this.youtube.playlistItems.insert({
-                auth: this.oauth2Client,
-                part: 'snippet',
-                requestBody: {
-                    snippet: {
-                        playlistId: playlistId,
-                        resourceId: {
-                            kind: 'youtube#video',
-                            videoId: videoId
-                        }
-                    }
-                }
-            });
-        } catch (error) {
-            Logger.error(`동영상 ${videoId} 추가 중 오류가 발생했습니다`, error);
-            throw error;
         }
     }
 }
@@ -258,7 +258,6 @@ async function updatePlaylist() {
 
         Logger.info(`채널 ${channelId}의 최신 동영상을 가져오는 중...`);
         const videos = await videoCollector.getLatestVideos(channelId);
-        
         if (videos.length === 0) {
             Logger.warn('가져올 수 있는 동영상이 없습니다.');
             return;
