@@ -1,32 +1,17 @@
 const { google } = require('googleapis');
 require('dotenv').config();
 
-// 상수 정의
 const CONSTANTS = {
     API: {
         VERSION: 'v3',
         BATCH_SIZE: 50,
         MAX_RESULTS: 20,
-        PARTS: {
-            SNIPPET: 'snippet'
-        },
-        RETRY: {
-            MAX_ATTEMPTS: 3,
-            INITIAL_DELAY: 1000,
-            MAX_DELAY: 10000
-        }
     },
     VIDEO: {
         INCLUDE_PATTERNS: [/\[MV\]/i, /\[Official Audio\]/i]
     },
-    PLAYLIST: {
-        TITLE: 'Daily Music Updates',
-        DESCRIPTION: 'Automatically updated playlist with latest music from subscribed channels',
-        PRIVACY: 'private'
-    }
 };
 
-// 로깅 유틸리티
 class Logger {
     static info(message) {
         console.log(`[INFO] ${message}`);
@@ -41,54 +26,6 @@ class Logger {
     }
 }
 
-// 유틸리티 함수
-class Utils {
-    static async retry(fn, context, maxAttempts = CONSTANTS.API.RETRY.MAX_ATTEMPTS, shouldRetry = () => true) {
-        let attempt = 0;
-        let lastError;
-
-        while (attempt < maxAttempts) {
-            try {
-                return await fn.call(context);
-            } catch (error) {
-                lastError = error;
-                attempt++;
-                
-                if (attempt === maxAttempts || !shouldRetry(error)) {
-                    throw error;
-                }
-
-                const delay = Math.min(
-                    CONSTANTS.API.RETRY.INITIAL_DELAY * Math.pow(2, attempt - 1),
-                    CONSTANTS.API.RETRY.MAX_DELAY
-                );
-                
-                Logger.warn(`시도 ${attempt}/${maxAttempts} 실패. ${delay}ms 후 재시도...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-
-        throw lastError;
-    }
-
-    static validateEnvVars() {
-        const missingVars = ['YOUTUBE_CLIENT_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_CHANNEL_ID', 'YOUTUBE_PLAYLIST_ID', 'YOUTUBE_ACCESS_TOKEN', 'YOUTUBE_REFRESH_TOKEN'].filter(envVar => !process.env[envVar]);
-        if (missingVars.length > 0) {
-            throw new Error(`필수 환경 변수가 설정되지 않았습니다: ${missingVars.join(', ')}`);
-        }
-
-        // 환경 변수 값 검증
-        if (!process.env.YOUTUBE_CHANNEL_ID.startsWith('UC')) {
-            throw new Error('유효하지 않은 채널 ID입니다. UC로 시작해야 합니다.');
-        }
-
-        if (process.env.YOUTUBE_PLAYLIST_ID && !process.env.YOUTUBE_PLAYLIST_ID.startsWith('PL')) {
-            throw new Error('유효하지 않은 플레이리스트 ID입니다. PL로 시작해야 합니다.');
-        }
-    }
-}
-
-// YouTube API 클라이언트
 class YouTubeClient {
     constructor() {
         this.youtube = google.youtube(CONSTANTS.API.VERSION);
@@ -96,9 +33,6 @@ class YouTubeClient {
             process.env.YOUTUBE_CLIENT_ID,
             process.env.YOUTUBE_CLIENT_SECRET
         );
-    }
-
-    setCredentials() {
         this.oauth2Client.setCredentials({
             access_token: process.env.YOUTUBE_ACCESS_TOKEN,
             refresh_token: process.env.YOUTUBE_REFRESH_TOKEN
@@ -106,7 +40,6 @@ class YouTubeClient {
     }
 }
 
-// 동영상 수집기
 class VideoCollector {
     constructor(youtubeClient) {
         this.youtube = youtubeClient.youtube;
@@ -137,7 +70,6 @@ class VideoCollector {
                 console.log('item', item);
             });
 
-            // 제목으로 필터링
             const filteredItems = response.data.items.filter(item => 
                 CONSTANTS.VIDEO.INCLUDE_PATTERNS.some(pattern => 
                     pattern.test(item.snippet.title)
@@ -146,9 +78,8 @@ class VideoCollector {
 
             Logger.info(`검색 결과 중 ${filteredItems.length}개의 동영상이 필터링되었습니다.`);
 
-            // 필터링된 동영상 추가 (최대 20개)
             const videos = filteredItems
-                .slice(0, CONSTANTS.API.MAX_RESULTS)  // 최대 20개로 제한
+                .slice(0, CONSTANTS.API.MAX_RESULTS) 
                 .map(item => ({
                     id: item.id.videoId,
                     title: item.snippet.title,
@@ -173,8 +104,8 @@ class VideoCollector {
     }
 }
 
-// 플레이리스트 관리자
 class PlaylistManager {
+    // TODO 이렇게 매번 세팅해준느거도 별로인듯 하고
     constructor(youtubeClient) {
         this.youtube = youtubeClient.youtube;
         this.oauth2Client = youtubeClient.oauth2Client;
@@ -182,19 +113,19 @@ class PlaylistManager {
 
     async updatePlaylistItems(playlistId, videos) {
         try {
-            // 플레이리스트의 현재 아이템 가져오기
             const currentItems = await this.getPlaylistItems(playlistId);
             
-            // 기존 동영상 모두 삭제
+            // TODO 다 삭제하고 추가하면 API 할당량 소모가 많아 필요한 항목만 업데이트 하면 좋을 듯
+            // 근데 굳이긴 하네....
             for (const item of currentItems) {
                 await this.youtube.playlistItems.delete({
+                    // TODO 토큰 설정을 이렇게 매번 한느건 별로고 한번에 할 수 있는 방법 고안...
                     auth: this.oauth2Client,
                     id: item.id
                 });
                 Logger.info(`기존 동영상 제거: ${item.snippet.title}`);
             }
 
-            // 새 동영상 추가 (최신순으로)
             for (const video of videos) {
                 await this.youtube.playlistItems.insert({
                     auth: this.oauth2Client,
@@ -239,13 +170,11 @@ class PlaylistManager {
     }
 }
 
-// 메인 실행 함수
 async function updatePlaylist() {
     Logger.info('플레이리스트 업데이트 시작...');
     
     try {
         const youtubeClient = new YouTubeClient();
-        youtubeClient.setCredentials();
 
         const playlistManager = new PlaylistManager(youtubeClient);
         const videoCollector = new VideoCollector(youtubeClient);
@@ -279,7 +208,6 @@ async function updatePlaylist() {
     }
 }
 
-// 실행
 updatePlaylist().catch(error => {
     Logger.error('프로그램 실행 중 오류가 발생했습니다', error);
     process.exit(1);
