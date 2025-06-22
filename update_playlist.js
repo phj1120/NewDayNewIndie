@@ -76,6 +76,9 @@ class VideoCollector {
         )
       );
 
+      // 최신순으로 정렬
+      filteredItems.sort((item1, item2) => new Date(item2.publishTime) - new Date(item1.publishTime))
+
       Logger.info(
         `검색 결과 중 ${filteredItems.length}개의 동영상이 필터링되었습니다.`
       );
