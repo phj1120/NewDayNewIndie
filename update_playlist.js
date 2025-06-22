@@ -148,7 +148,7 @@ class PlaylistManager {
             if (error.code === 403 && error.message.includes('quotaExceeded')) {
                 Logger.error('YouTube API 할당량이 초과되었습니다. 24시간 후에 다시 시도해주세요.');
             } else {
-                Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error.message);
+                Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error);
             }
             throw error;
         }
@@ -202,7 +202,7 @@ async function updatePlaylist() {
         } else if (error.code === 404) {
             Logger.error('채널을 찾을 수 없습니다. 채널 ID를 확인해주세요.');
         } else {
-            Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error.message);
+            Logger.error('플레이리스트 업데이트 중 오류가 발생했습니다:', error);
         }
         throw error;
     }
