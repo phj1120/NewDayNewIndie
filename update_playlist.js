@@ -227,7 +227,7 @@ async function updatePlaylist() {
   }
 }
 
-const retryCount = 0;
+let retryCount = 0;
 updatePlaylist().catch((error) => {
   Logger.error("프로그램 실행 중 오류가 발생했습니다", error);
   if (retryCount < 10) {
